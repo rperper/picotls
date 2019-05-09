@@ -3,7 +3,52 @@ CMAKE_POLICY(SET CMP0003 NEW)
 
 PROJECT(picotls)
 
+# The following lines are for OpenSSL
+#set(OPENSSL_ROOT_DIR /home/user/proj2/openssl)
+#set(OPENSSL_USE_STATIC_LIBS TRUE)
+# The following lines are for BoringSSL
+set(BORING_ROOT /home/user/proj/thirdparty/boringssl)
+set(BORING_LIBRARY_DIR /home/user/proj/thirdparty/lib)
+set(BROTLI_ROOT /home/user/proj/thirdparty/brotli)
+set(BROTLI_DEC /home/user/proj/thirdparty/lib/libbrotlidec-static.a)
+set(BROTLI_ENC /home/user/proj/thirdparty/lib/libbrotlienc-static.a)
+
 FIND_PACKAGE(PkgConfig REQUIRED)
+
+IF (BORING_ROOT AND BORING_LIBRARY_DIR)
+    set(PKG_CONFIG_EXECUTABLE 0)
+    set(OPENSSL_INCLUDE_DIR "${BORING_ROOT}/include")
+    set(OPENSSL_FOUND ON)
+    set(OPENSSL_SSL_LIBRARY "${BORING_LIBRARY_DIR}/libssl.a;${BORING_LIBRARY_DIR}/libdecrepit.a")
+    set(OPENSSL_CRYPTO_LIBRARY ${BORING_LIBRARY_DIR}/libcrypto.a)
+    set(OPENSSL_LIBRARIES "${OPENSSL_SSL_LIBRARY};${OPENSSL_CRYPTO_LIBRARY}")
+    add_definitions(-DBORING_SSL)
+    set(OPENSSL_VERSION "1.1.0a")
+    message("Using BoringSSL lib:" ${OPENSSL_LIBRARIES})
+ELSE ()
+    message("Using system OPENSSL")
+    FIND_PACKAGE(OpenSSL)
+ENDIF ()
+
+IF (BROTLI_ROOT)
+    set(BROTLI_ENC_INCLUDE_DIRS $BROTLI_ROOT/c/include)
+    message("Using Brotli include")
+ENDIF ()
+
+IF (BROTLI_DEC)
+    set(BROTLI_DEC_FOUND ON)
+    message("Using Brotli dec library")
+ELSE ()
+    PKG_CHECK_MODULES(BROTLI_DEC libbrotlidec)
+ENDIF ()
+
+IF (BROTLI_ENC)
+    set(BROLI_ENC_FOUND ON)
+    message("Using Brotli enc library")
+ELSE ()
+    PKG_CHECK_MODULES(BROTLI_ENC libbrotlienc)
+ENDIF ()
+
 
 SET(CMAKE_C_FLAGS "-std=c99 -Wall -O2 -g ${CC_WARNING_FLAGS} ${CMAKE_C_FLAGS}")
 INCLUDE_DIRECTORIES(${OPENSSL_INCLUDE_DIR} deps/cifra/src/ext deps/cifra/src deps/micro-ecc deps/picotest include)
@@ -26,8 +71,6 @@ SET(CORE_FILES
     lib/picotls.c
     lib/pembase64.c)
 
-PKG_CHECK_MODULES(BROTLI_DEC libbrotlidec)
-PKG_CHECK_MODULES(BROTLI_ENC libbrotlienc)
 IF (BROTLI_DEC_FOUND AND BROTLI_ENC_FOUND)
     INCLUDE_DIRECTORIES(${BROTLI_DEC_INCLUDE_DIRS} ${BROTLI_ENC_INCLUDE_DIRS})
     LINK_DIRECTORIES(${BROTLI_DEC_LIBRARY_DIRS} ${BROTLI_ENC_LIBRARY_DIRS})
@@ -45,11 +88,14 @@ ADD_EXECUTABLE(test-minicrypto.t ${MINICRYPTO_LIBRARY_FILES} deps/picotest/picot
 
 SET(TEST_EXES test-minicrypto.t)
 
-FIND_PACKAGE(OpenSSL)
 IF (OPENSSL_FOUND AND NOT (OPENSSL_VERSION VERSION_LESS "1.0.1"))
     MESSAGE(WARNING "Enabling OpenSSL support")
     INCLUDE_DIRECTORIES(${OPENSSL_INCLUDE_DIR})
-    ADD_LIBRARY(picotls-openssl lib/openssl.c)
+    IF (BORING_ROOT)
+        ADD_LIBRARY(picotls-openssl lib/openssl.c lib/boring.c)
+    ELSE ()
+        ADD_LIBRARY(picotls-openssl lib/openssl.c)
+    ENDIF ()
     TARGET_LINK_LIBRARIES(picotls-openssl ${OPENSSL_LIBRARIES} picotls-core ${CMAKE_DL_LIBS})
     ADD_EXECUTABLE(cli t/cli.c lib/pembase64.c)
     TARGET_LINK_LIBRARIES(cli picotls-openssl picotls-core)
@@ -66,7 +112,7 @@ IF (OPENSSL_FOUND AND NOT (OPENSSL_VERSION VERSION_LESS "1.0.1"))
 
     SET(TEST_EXES ${TEST_EXES} test-openssl.t)
 ELSE ()
-    MESSAGE(WARNING "Disabling OpenSSL support (requires 1.0.1 or newer)")
+    MESSAGE(WARNING "Disabling OpenSSL support (requires 1.0.1 or newer) version is ${OPENSSL_VERSION}")
 ENDIF ()
 
 ADD_CUSTOM_TARGET(check env BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR} prove --exec '' -v ${CMAKE_CURRENT_BINARY_DIR}/*.t t/*.t WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} DEPENDS ${TEST_EXES} cli)

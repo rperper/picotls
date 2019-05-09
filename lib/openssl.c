@@ -40,6 +40,9 @@
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 #include <openssl/x509_vfy.h>
+#ifdef BORING_SSL
+#include "boring.h"
+#endif
 #include "picotls.h"
 #include "picotls/openssl.h"
 
@@ -376,11 +379,119 @@ Exit:
 
 #if PTLS_OPENSSL_HAVE_X25519
 
+#ifdef BORING_SSL
+struct st_X25519_keyex_context_t {
+    ptls_key_exchange_context_t super;
+    uint8_t privkey[X25519_PRIVATE_KEY_LEN];
+    uint8_t peerkey[X25519_PUBLIC_VALUE_LEN];
+};
+
+
+static void X25519_free_context(struct st_X25519_keyex_context_t *ctx)
+{
+    if (ctx->super.pubkey.base)
+        free(ctx->super.pubkey.base);
+    free(ctx);
+}
+
+static int X25519_create_context(const ptls_key_exchange_algorithm_t *algo,
+                                 struct st_X25519_keyex_context_t **ctx)
+{
+    int ret;
+
+    if (((*ctx = (struct st_X25519_keyex_context_t *)calloc(sizeof(**ctx), 1)) == NULL) ||
+        (((*ctx)->super.pubkey.base = malloc(X25519_PUBLIC_VALUE_LEN)) == NULL))
+        ret = PTLS_ERROR_NO_MEMORY;
+    else
+        ret = 0;
+    if (ret)
+    {
+        X25519_free_context(*ctx);
+        *ctx = NULL;
+    }
+    return ret;
+}
+
+static int X25519_on_exchange(ptls_key_exchange_context_t **_ctx, int release,
+                              ptls_iovec_t *secret, ptls_iovec_t peerkey)
+{
+    struct st_X25519_keyex_context_t *ctx = (struct st_X25519_keyex_context_t *)*_ctx;
+    int ret = 0;
+    uint8_t sec[X25519_PUBLIC_VALUE_LEN];
+
+    if (secret == NULL)
+        ret = 0; /* abort */
+    else if (peerkey.base == NULL)
+        ret = PTLS_ALERT_ILLEGAL_PARAMETER;
+    else if (X25519(sec, ctx->privkey, peerkey.base) == 0)
+        ret = PTLS_ALERT_DECODE_ERROR;
+    else if ((secret->base = malloc(X25519_PUBLIC_VALUE_LEN)) == NULL)
+        ret = PTLS_ERROR_NO_MEMORY;
+    else
+    {
+        memcpy(secret->base, sec, sizeof(sec));
+        secret->len = X25519_PUBLIC_VALUE_LEN;
+    }
+    if (release)
+    {
+        X25519_free_context(ctx);
+        *_ctx = NULL;
+    }
+    return ret;
+}
+
+static int X25519_keyex_create(ptls_key_exchange_algorithm_t *algo, ptls_key_exchange_context_t **ctx)
+{
+    struct st_X25519_keyex_context_t *X25519_ctx;
+    int ret;
+
+    /* generate private key */
+    if ((ret = X25519_create_context(algo, &X25519_ctx)) == 0)
+    {
+        *ctx = &X25519_ctx->super;
+        (*ctx)->algo = algo;
+        (*ctx)->on_exchange = X25519_on_exchange;
+        (*ctx)->pubkey.len = X25519_PUBLIC_VALUE_LEN;
+        X25519_keypair((*ctx)->pubkey.base, X25519_ctx->privkey);
+    }
+    return ret;
+}
+
+static int X25519_exchange(ptls_key_exchange_algorithm_t *algo,
+                           ptls_iovec_t *outpubkey, ptls_iovec_t *secret,
+                           ptls_iovec_t peerkey)
+{
+    struct st_X25519_keyex_context_t *ctx = NULL;
+    int ret;
+
+    if (peerkey.len != X25519_PUBLIC_VALUE_LEN)
+        return PTLS_ALERT_ILLEGAL_PARAMETER;
+    if ((ret = X25519_keyex_create(algo, (ptls_key_exchange_context_t **) &ctx)) != 0)
+        return ret;
+    if ((outpubkey->base = malloc(X25519_PUBLIC_VALUE_LEN)) == NULL)
+        ret = PTLS_ERROR_NO_MEMORY;
+    else
+    {
+        memcpy(outpubkey->base, ctx->super.pubkey.base, X25519_PUBLIC_VALUE_LEN);
+        outpubkey->len = ctx->super.pubkey.len;
+        ret = X25519_on_exchange((ptls_key_exchange_context_t **)&ctx, 1, secret, peerkey);
+        assert(ctx == NULL);
+    }
+
+    if (ret != 0)
+        free(outpubkey->base);
+    return ret;
+}
+
+#endif /* BORING ONLY */
+
+
 struct st_evp_keyex_context_t {
     ptls_key_exchange_context_t super;
     EVP_PKEY *privkey;
 };
 
+#ifndef BORING_SSL
 static void evp_keyex_free(struct st_evp_keyex_context_t *ctx)
 {
     if (ctx->privkey != NULL)
@@ -389,7 +500,10 @@ static void evp_keyex_free(struct st_evp_keyex_context_t *ctx)
         OPENSSL_free(ctx->super.pubkey.base);
     free(ctx);
 }
+#endif
 
+
+#ifndef BORING_SSL
 static int evp_keyex_on_exchange(ptls_key_exchange_context_t **_ctx, int release, ptls_iovec_t *secret, ptls_iovec_t peerkey)
 {
     struct st_evp_keyex_context_t *ctx = (void *)*_ctx;
@@ -460,7 +574,10 @@ Exit:
     }
     return ret;
 }
+#endif
 
+
+#ifndef BORING_SSL
 static int evp_keyex_init(ptls_key_exchange_algorithm_t *algo, ptls_key_exchange_context_t **_ctx, EVP_PKEY *pkey)
 {
     struct st_evp_keyex_context_t *ctx = NULL;
@@ -486,7 +603,10 @@ Exit:
         evp_keyex_free(ctx);
     return ret;
 }
+#endif
 
+
+#ifndef BORING_SSL
 static int evp_keyex_create(ptls_key_exchange_algorithm_t *algo, ptls_key_exchange_context_t **ctx)
 {
     EVP_PKEY_CTX *evpctx = NULL;
@@ -547,8 +667,8 @@ Exit:
         free(outpubkey->base);
     return ret;
 }
-
-#endif
+#endif /* BORING_SSL */
+#endif /* PTLS_OPENSSL_HAVE_X25519 */
 
 int ptls_openssl_create_key_exchange(ptls_key_exchange_context_t **ctx, EVP_PKEY *pkey)
 {
@@ -591,11 +711,13 @@ int ptls_openssl_create_key_exchange(ptls_key_exchange_context_t **ctx, EVP_PKEY
     } break;
 
 #if PTLS_OPENSSL_HAVE_X25519
+#ifndef BORING_SSL
     case NID_X25519:
         if ((ret = evp_keyex_init(&ptls_openssl_x25519, ctx, pkey)) != 0)
             return ret;
         EVP_PKEY_up_ref(pkey);
         return 0;
+#endif
 #endif
 
     default:
@@ -1411,7 +1533,13 @@ ptls_key_exchange_algorithm_t ptls_openssl_secp521r1 = {PTLS_GROUP_SECP521R1, x9
                                                         NID_secp521r1};
 #endif
 #if PTLS_OPENSSL_HAVE_X25519
-ptls_key_exchange_algorithm_t ptls_openssl_x25519 = {PTLS_GROUP_X25519, evp_keyex_create, evp_keyex_exchange, NID_X25519};
+ptls_key_exchange_algorithm_t ptls_openssl_x25519 = {PTLS_GROUP_X25519,
+#ifdef BORING_SSL
+                                                     X25519_keyex_create, X25519_exchange,
+#else
+                                                     evp_keyex_create, evp_keyex_exchange,
+#endif
+                                                     NID_X25519};
 #endif
 ptls_key_exchange_algorithm_t *ptls_openssl_key_exchanges[] = {&ptls_openssl_secp256r1, NULL};
 ptls_cipher_algorithm_t ptls_openssl_aes128ecb = {

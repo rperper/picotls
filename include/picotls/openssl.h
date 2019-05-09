@@ -32,7 +32,7 @@ extern "C" {
 #include <openssl/x509.h>
 #include "../picotls.h"
 
-#if OPENSSL_VERSION_NUMBER >= 0x10100000L && !defined(LIBRESSL_VERSION_NUMBER)
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && !defined(LIBRESSL_VERSION_NUMBER) && !defined(BORING_SSL)
 #define PTLS_OPENSSL_HAVE_CHACHA20_POLY1305 1
 #endif
 
