@@ -19,15 +19,14 @@ IF (BORING_ROOT AND BORING_LIBRARY_DIR)
     set(PKG_CONFIG_EXECUTABLE 0)
     set(OPENSSL_INCLUDE_DIR "${BORING_ROOT}/include")
     set(OPENSSL_FOUND ON)
-    set(OPENSSL_SSL_LIBRARY "${BORING_LIBRARY_DIR}/libssl.a;${BORING_LIBRARY_DIR}/libdecrepit.a")
-    set(OPENSSL_CRYPTO_LIBRARY ${BORING_LIBRARY_DIR}/libcrypto.a)
-    set(OPENSSL_LIBRARIES "${OPENSSL_SSL_LIBRARY};${OPENSSL_CRYPTO_LIBRARY}")
-    add_definitions(-DBORING_SSL)
+    set(OPENSSL_SSL_LIBRARY ${BORING_LIBRARY_DIR}/libssl.a ${BORING_LIBRARY_DIR}/libdecrepit.a)
+    set(OPENSSL_CRYPTO_LIBRARY "${BORING_LIBRARY_DIR}/libcrypto.a")
+    set(OPENSSL_LIBRARIES ${OPENSSL_SSL_LIBRARY} ${OPENSSL_CRYPTO_LIBRARY})
     set(OPENSSL_VERSION "1.1.0a")
-    message("Using BoringSSL lib:" ${OPENSSL_LIBRARIES})
+    message("Using BoringSSL lib: " ${OPENSSL_LIBRARIES})
 ELSE ()
-    message("Using system OPENSSL")
     FIND_PACKAGE(OpenSSL)
+    message("Using system OPENSSL lib: " ${OPENSSL_LIBRARIES})
 ENDIF ()
 
 IF (BROTLI_ROOT)
@@ -67,6 +66,9 @@ SET(MINICRYPTO_LIBRARY_FILES
     deps/cifra/src/poly1305.c
     deps/cifra/src/sha256.c
     deps/cifra/src/sha512.c)
+IF (BORING_ROOT)
+    SET(MINICRYPTO_LIBRARY_FILES ${MINICRYPTO_LIBRARY_FILES})
+ENDIF ()
 SET(CORE_FILES
     lib/picotls.c
     lib/pembase64.c)
@@ -104,7 +106,7 @@ IF (OPENSSL_FOUND AND NOT (OPENSSL_VERSION VERSION_LESS "1.0.1"))
 
     ADD_EXECUTABLE(test-openssl.t ${MINICRYPTO_LIBRARY_FILES} lib/cifra.c lib/uecc.c lib/asn1.c lib/pembase64.c lib/ffx.c deps/picotest/picotest.c t/picotls.c t/openssl.c)
     SET_TARGET_PROPERTIES(test-openssl.t PROPERTIES COMPILE_FLAGS "-DPTLS_MEMORY_DEBUG=1")
-    TARGET_LINK_LIBRARIES(test-openssl.t ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
+    TARGET_LINK_LIBRARIES(test-openssl.t picotls-openssl)
 
     ADD_EXECUTABLE(ptlsbench t/ptlsbench.c)
     SET_TARGET_PROPERTIES(ptlsbench PROPERTIES COMPILE_FLAGS "-DPTLS_MEMORY_DEBUG=1")

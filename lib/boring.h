@@ -88,9 +88,11 @@ inline void *OPENSSL_memdup(void *data, size_t s)
  * elements as opposite to passing verbatim byte vectors, is chosen for
  * efficiency in multi-call scenarios.
  */
+/*
 void ChaCha20_ctr32(unsigned char *out, const unsigned char *inp,
                     size_t len, const unsigned int key[8],
                     const unsigned int counter[4]);
+*/
 /*
  * You can notice that there is no key setup procedure. Because it's
  * as trivial as collecting bytes into 32-bit elements, it's reckoned
@@ -106,6 +108,7 @@ void ChaCha20_ctr32(unsigned char *out, const unsigned char *inp,
 
 #endif
 
+#include <openssl/poly1305.h>
 /* From openssl: crypto/include/internal/poly1305.h: */
 /*
  * Copyright 2015-2016 The OpenSSL Project Authors. All Rights Reserved.
@@ -122,19 +125,18 @@ void ChaCha20_ctr32(unsigned char *out, const unsigned char *inp,
 #define POLY1305_DIGEST_SIZE 16
 #define POLY1305_KEY_SIZE    32
 
-typedef struct poly1305_context POLY1305;
+//typedef struct poly1305_context POLY1305;
+typedef uint8_t poly1305_state[512];
+typedef poly1305_state POLY1305;
 
-size_t Poly1305_ctx_size(void);
-void Poly1305_Init(POLY1305 *ctx, const unsigned char key[32]);
-void Poly1305_Update(POLY1305 *ctx, const unsigned char *inp, size_t len);
-void Poly1305_Final(POLY1305 *ctx, unsigned char mac[16]);
+inline size_t Poly1305_ctx_size(void) { return sizeof(POLY1305); }
+
+#define Poly1305_Init CRYPTO_poly1305_init
+#define Poly1305_Update CRYPTO_poly1305_update
+#define Poly1305_Final CRYPTO_poly1305_finish
 
 const EVP_CIPHER *EVP_chacha20(void);
 const EVP_CIPHER *EVP_chacha20_poly1305(void);
-
-int EVP_PKEY_set1_tls_encodedpoint(EVP_PKEY *pkey,
-                                   const unsigned char *pt, size_t ptlen);
-size_t EVP_PKEY_get1_tls_encodedpoint(EVP_PKEY *pkey, unsigned char **ppt);
 
 #ifdef __cplusplus
 }

@@ -3,6 +3,7 @@
 
 #include <openssl/ssl.h>
 #include <../crypto/evp/internal.h>
+#include <openssl/chacha.h>
 #include "boring.h"
 
 /* Modified from openssl crypto/evp/e_chacha20_poly1305.c */
@@ -12,7 +13,7 @@ typedef struct {
         double align;   /* this ensures even sizeof(EVP_CHACHA_KEY)%8==0 */
         unsigned int d[CHACHA_KEY_SIZE / 4];
     } key;
-    unsigned int  counter[CHACHA_CTR_SIZE / 4];
+    unsigned int  counter[CHACHA_CTR_SIZE / 4]; /* First 3 ints are the nonce, and the last is the counter */
     unsigned char buf[CHACHA_BLK_SIZE];
     unsigned int  partial_len;
 } EVP_CHACHA_KEY;
@@ -41,6 +42,30 @@ static int chacha_init_key(EVP_CIPHER_CTX *ctx,
     key->partial_len = 0;
 
     return 1;
+}
+
+/* Matches the OpenSSL ChaCha20 implementation: from it's header file:
+ * ChaCha20_ctr32 encrypts |len| bytes from |inp| with the given key and
+ * nonce and writes the result to |out|, which may be equal to |inp|.
+ * The |key| is not 32 bytes of verbatim key material though, but the
+ * said material collected into 8 32-bit elements array in host byte
+ * order. Same approach applies to nonce: the |counter| argument is
+ * pointer to concatenated nonce and counter values collected into 4
+ * 32-bit elements. This, passing crypto material collected into 32-bit
+ * elements as opposite to passing verbatim byte vectors, is chosen for
+ * efficiency in multi-call scenarios.
+ */
+static void
+ChaCha20_ctr32(unsigned char *out, const unsigned char *inp, size_t len,
+               const unsigned int key[8], const unsigned int counter[4])
+{
+/* Mapping into Boring's definition:
+ * OPENSSL_EXPORT void CRYPTO_chacha_20(uint8_t *out, const uint8_t *in,
+ *                                      size_t in_len, const uint8_t key[32],
+ *                                      const uint8_t nonce[12], uint32_t counter);
+ */
+    CRYPTO_chacha_20(out, inp, len, (const uint8_t *)key, (const uint8_t *)&counter[1],
+                     counter[0]);
 }
 
 static int chacha_cipher(EVP_CIPHER_CTX * ctx, unsigned char *out,
@@ -92,6 +117,7 @@ static int chacha_cipher(EVP_CIPHER_CTX * ctx, unsigned char *out,
             ctr32 = 0;
         }
         blocks *= CHACHA_BLK_SIZE;
+        //CRYPTO_chacha_20
         ChaCha20_ctr32(out, inp, blocks, key->key.d, key->counter);
         len -= blocks;
         inp += blocks;

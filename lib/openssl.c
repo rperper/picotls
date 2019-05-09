@@ -40,7 +40,7 @@
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 #include <openssl/x509_vfy.h>
-#ifdef BORING_SSL
+#ifdef OPENSSL_IS_BORINGSSL
 #include "boring.h"
 #endif
 #include "picotls.h"
@@ -379,7 +379,7 @@ Exit:
 
 #if PTLS_OPENSSL_HAVE_X25519
 
-#ifdef BORING_SSL
+#ifdef OPENSSL_IS_BORINGSSL
 struct st_X25519_keyex_context_t {
     ptls_key_exchange_context_t super;
     uint8_t privkey[X25519_PRIVATE_KEY_LEN];
@@ -491,7 +491,7 @@ struct st_evp_keyex_context_t {
     EVP_PKEY *privkey;
 };
 
-#ifndef BORING_SSL
+#ifndef OPENSSL_IS_BORINGSSL
 static void evp_keyex_free(struct st_evp_keyex_context_t *ctx)
 {
     if (ctx->privkey != NULL)
@@ -503,7 +503,7 @@ static void evp_keyex_free(struct st_evp_keyex_context_t *ctx)
 #endif
 
 
-#ifndef BORING_SSL
+#ifndef OPENSSL_IS_BORINGSSL
 static int evp_keyex_on_exchange(ptls_key_exchange_context_t **_ctx, int release, ptls_iovec_t *secret, ptls_iovec_t peerkey)
 {
     struct st_evp_keyex_context_t *ctx = (void *)*_ctx;
@@ -577,7 +577,7 @@ Exit:
 #endif
 
 
-#ifndef BORING_SSL
+#ifndef OPENSSL_IS_BORINGSSL
 static int evp_keyex_init(ptls_key_exchange_algorithm_t *algo, ptls_key_exchange_context_t **_ctx, EVP_PKEY *pkey)
 {
     struct st_evp_keyex_context_t *ctx = NULL;
@@ -606,7 +606,7 @@ Exit:
 #endif
 
 
-#ifndef BORING_SSL
+#ifndef OPENSSL_IS_BORINGSSL
 static int evp_keyex_create(ptls_key_exchange_algorithm_t *algo, ptls_key_exchange_context_t **ctx)
 {
     EVP_PKEY_CTX *evpctx = NULL;
@@ -667,7 +667,7 @@ Exit:
         free(outpubkey->base);
     return ret;
 }
-#endif /* BORING_SSL */
+#endif /* OPENSSL_IS_BORINGSSL */
 #endif /* PTLS_OPENSSL_HAVE_X25519 */
 
 int ptls_openssl_create_key_exchange(ptls_key_exchange_context_t **ctx, EVP_PKEY *pkey)
@@ -711,7 +711,7 @@ int ptls_openssl_create_key_exchange(ptls_key_exchange_context_t **ctx, EVP_PKEY
     } break;
 
 #if PTLS_OPENSSL_HAVE_X25519
-#ifndef BORING_SSL
+#ifndef OPENSSL_IS_BORINGSSL
     case NID_X25519:
         if ((ret = evp_keyex_init(&ptls_openssl_x25519, ctx, pkey)) != 0)
             return ret;
@@ -1534,7 +1534,7 @@ ptls_key_exchange_algorithm_t ptls_openssl_secp521r1 = {PTLS_GROUP_SECP521R1, x9
 #endif
 #if PTLS_OPENSSL_HAVE_X25519
 ptls_key_exchange_algorithm_t ptls_openssl_x25519 = {PTLS_GROUP_X25519,
-#ifdef BORING_SSL
+#ifdef OPENSSL_IS_BORINGSSL
                                                      X25519_keyex_create, X25519_exchange,
 #else
                                                      evp_keyex_create, evp_keyex_exchange,
