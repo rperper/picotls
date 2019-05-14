@@ -41,10 +41,99 @@ Build using cmake:
 
 A dedicated documentation for using picotls with Visual Studio can be found in [WindowsPort.md](WindowsPort.md).
 
+Building details
+---
+
+Following the instructions above, cmake will search for OpenSSL.  If OpenSSL is installed in a non-standard location or you wish to use a specific version of it, you have specify the location for the root directory on the `cmake` command line:
+
+```
+cmake -DOPENSSL_ROOT_DIR=/openssl/root/directory
+```
+For example:
+```
+cmake -DOPENSSL_ROOT_DIR=/home/user/proj2/openssl
+```
+
+Similarly, you can force the use of static libraries for OpenSSL:
+
+```
+cmake -DOPENSSL_USE_STATIC_LIBS=TRUE
+```
+
+Compiling with BoringSSL
+---
+
+The picotls can now use the BoringSSL library from Google as a replacement for OpenSSL.  Again, this is defined with parameters to cmake:
+```
+cmake -DBORING_ROOT=/boring/root/directory -DBORING_LIBRARY_DIR=/boring/root/lib
+```
+For example:
+```
+cmake -DBORING_ROOT=/home/user/proj/thirdparty/boringssl -DBORING_LIBRARY_DIR=/home/user/proj/thirdparty/lib
+```
+
+Brotli
+---
+
+Picotls will search for Brotli libraries and use them if found.  However, you can specify their location on the command line to cmake:
+
+```
+cmake -DBROTLI_ROOT=/directory/to/brotli -DBROTLI_DEC=/full/path/to/decryption/library.a -DBROTLI_ENC=/full/path/to/encryption/library.a
+```
+
 Developer documentation
 ---
 
 Developer documentation should be available on [the wiki](https://github.com/h2o/picotls/wiki).
+
+
+Private key methods
+---
+
+The programming interface for picotls remains the same for BoringSSL as for OpenSSL.  But there is a feature of BoringSSL which can improve performance of your application: private_key_method.  Within BoringSSL you can specify a set of callback functions to be performed during the handshake for signing a certificate and for decryption.  The performance benefit is gained by off-loading these tasks to a separate processor, thread or task, which frees the main thread of your process to continue to be highly performant.
+
+There is little to be gained in performance in decryption so that particular callback is not implemented; however the callback to implement signing a certificate is.  This is a server only funcation so it's not useful if you are implementing client only functions.
+
+There is a single structure `ptls_private_key_method_t` with two callback functions you specify: `sign` and `complete`.
+
+To enable the feature, create a context as you normally do (ptls_context_t).  In the context, there is a member: `private_key_method` which is of type: `ptls_private_key_method_t *`.  Assign it's value to a static which points the to `sign` and `complete` functions in your program.
+
+The `sign` function:
+```
+    enum ptls_private_key_result_t (*sign)(ptls_sign_certificate_t *do_sign,
+                                           ptls_t *tls,
+                                           uint16_t *selected_algorithm,
+                                           ptls_buffer_t *output,
+                                           ptls_iovec_t input,
+                                           const uint16_t *algorithms,
+                                           size_t num_algorithms);
+
+```
+Inputs:
+   - do_sign: The system sign function which can be called in a separate process or thread using the remaining parameters:
+   - tls: The active session.
+   - input: A buffer and length of the input to be used.  You must make a copy of this as it is only passed once.
+   - algorithms: An array of algoriths which are legal for this function.  You must make a copy of this as it is only passed once.
+   - num_algorithms:  The number of algorithms in the algorithms array.
+Outputs:
+   - selected_algorithm: One of the algorithms passed in, the one use for the signature.
+   - output: The length and data of the signature.
+Returns:
+   One of the enumerated values: 
+   - ptls_private_key_success: Indicates that the data has been processed into output and selected_algorithm.
+   - ptls_private_key_retry: The process is still running.  The complete function will be called repeatedly until a return code other than this is returned.
+   - ptls_private_key_failure: Indicates that the operation failed.
+
+Most likely your initial `sign` function will return `ptls_private_key_retry` so picotls will need to poll your application until it indicates it is done.  It does this with the `complete` function:
+
+```
+    enum ptls_private_key_result_t (*complete)(ptls_sign_certificate_t *do_sign,
+                                               ptls_t *tls,
+                                               uint16_t *selected_algorithm,
+                                               ptls_buffer_t *output);
+
+```
+Parameters are the same as for `sign`.
 
 Using the cli command
 ---
