@@ -115,14 +115,16 @@ Inputs:
    - input: A buffer and length of the input to be used.  You must make a copy of this as it is only passed once.
    - algorithms: An array of algoriths which are legal for this function.  You must make a copy of this as it is only passed once.
    - num_algorithms:  The number of algorithms in the algorithms array.
+
 Outputs:
+
    - selected_algorithm: One of the algorithms passed in, the one use for the signature.
    - output: The length and data of the signature.
-Returns:
-   One of the enumerated values: 
-   - ptls_private_key_success: Indicates that the data has been processed into output and selected_algorithm.
-   - ptls_private_key_retry: The process is still running.  The complete function will be called repeatedly until a return code other than this is returned.
-   - ptls_private_key_failure: Indicates that the operation failed.
+
+Returns: one of the enumerated values: 
+   - `ptls_private_key_success`: Indicates that the data has been processed into output and selected_algorithm.
+   - `ptls_private_key_retry`: The process is still running.  The complete function will be called repeatedly until a return code other than this is returned.
+   - `ptls_private_key_failure`: Indicates that the operation failed.
 
 Most likely your initial `sign` function will return `ptls_private_key_retry` so picotls will need to poll your application until it indicates it is done.  It does this with the `complete` function:
 
