@@ -763,6 +763,7 @@ static int do_sign(EVP_PKEY *key, ptls_buffer_t *outbuf, ptls_iovec_t input, con
         ret = PTLS_ERROR_LIBRARY;
         goto Exit;
     }
+    msg("reserving %ld bytes", siglen);
     if ((ret = ptls_buffer_reserve(outbuf, siglen)) != 0)
         goto Exit;
     if (EVP_DigestSignFinal(ctx, outbuf->base + outbuf->off, &siglen) != 1) {

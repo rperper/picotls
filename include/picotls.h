@@ -26,6 +26,9 @@
 extern "C" {
 #endif
 
+/* Comment out OPTS to remove command line options and message writing */
+#define OPTS
+
 #include <assert.h>
 #include <inttypes.h>
 #include <sys/types.h>
@@ -132,6 +135,7 @@ extern "C" {
 #define PTLS_ERROR_STATELESS_RETRY (PTLS_ERROR_CLASS_INTERNAL + 6)
 #define PTLS_ERROR_NOT_AVAILABLE (PTLS_ERROR_CLASS_INTERNAL + 7)
 #define PTLS_ERROR_COMPRESSION_FAILURE (PTLS_ERROR_CLASS_INTERNAL + 8)
+#define PTLS_ERROR_SIGN_FAILURE (PTLS_ERROR_CLASS_INTERNAL + 9)
 
 #define PTLS_ERROR_INCORRECT_BASE64 (PTLS_ERROR_CLASS_INTERNAL + 50)
 #define PTLS_ERROR_PEM_LABEL_NOT_FOUND (PTLS_ERROR_CLASS_INTERNAL + 51)
@@ -524,6 +528,65 @@ typedef struct st_ptls_decompress_certificate_t {
 PTLS_CALLBACK_TYPE(int, update_esni_key, ptls_t *tls, ptls_iovec_t secret, ptls_hash_algorithm_t *hash,
                    const void *hashed_esni_contents);
 
+/* Custom private keys. */
+enum ptls_private_key_result_t {
+  ptls_private_key_success,
+  ptls_private_key_retry,
+  ptls_private_key_failure,
+};
+/**
+ * Allows specification of offload private key signing functions.
+ */
+typedef struct st_ptls_private_key_method
+{
+    /**
+     * sign is basically the same as the ptls_sign_certificate_t function but
+     * also includes the function structure as it's first parameter so that
+     * you can directly call it.  On success, it returns |ptls_private_key_success|
+     * and writes to the output buffer following the rules of ptls_sign_certificate_t.
+     * On failure, it returns |ptls_private_key_failure|. If the operation
+     * has not completed, it returns |ptls_private_key_retry|. |sign| should
+     * arrange for the handshake operation on |ptls| to be retried when the
+     * operation is completed. This will result in a call to |complete|.
+     *
+     * If the operation is to be called asynchronously, then copies of the input
+     * data should be made and data only written to the output when the operation
+     * is actually being completed.  Note that algorithm must be returned on
+     * successful completion.
+     *
+     * It is an error to call |sign| while another private key operation is in
+     * progress on |ptls|.
+     */
+    enum ptls_private_key_result_t (*sign)(ptls_sign_certificate_t *do_sign,
+                                           ptls_t *tls,
+                                           uint16_t *selected_algorithm,
+                                           ptls_buffer_t *output,
+                                           ptls_iovec_t input,
+                                           const uint16_t *algorithms,
+                                           size_t num_algorithms);
+
+    /**
+     * complete is basically the same as the sign function.  On success, it
+     * returns |ptls_private_key_success| and writes to the output buffer
+     * following the rules of ptls_sign_certificate_t.  On failure, it returns
+     * |ptls_private_key_failure|. If the operation has not completed, it
+     * returns |ptls_private_key_retry|. |complete| should arrange for the
+     * handshake operation on |ptls| to be retried when the operation is
+     * completed. This will result in a call to |complete|.
+     *
+     * Note that algorithm must be returned on successful completion.
+     *
+     * It is an error to call |complete| while another private key operation is
+     * in progress on |ptls|.
+     */
+    enum ptls_private_key_result_t (*complete)(ptls_sign_certificate_t *do_sign,
+                                               ptls_t *tls,
+                                               uint16_t *selected_algorithm,
+                                               ptls_buffer_t *output);
+
+} ptls_private_key_method_t;
+
+
 /**
  * the configuration
  */
@@ -641,6 +704,10 @@ struct st_ptls_context_t {
      *
      */
     ptls_on_extension_t *on_extension;
+    /**
+     *
+     */
+    ptls_private_key_method_t *private_key_method;
 };
 
 typedef struct st_ptls_raw_extension_t {
@@ -985,7 +1052,12 @@ void **ptls_get_data_ptr(ptls_t *tls);
  */
 int ptls_handshake(ptls_t *tls, ptls_buffer_t *sendbuf, const void *input, size_t *inlen, ptls_handshake_properties_t *args);
 /**
+ * Returns if the handshake is in a private key retry.
+ */
+int ptls_handshake_in_private_key(ptls_t *tls);
+/**
  * decrypts the first record within given buffer
+ * At this time, ptls_receive does not support private_key_method's.
  */
 int ptls_receive(ptls_t *tls, ptls_buffer_t *plaintextbuf, const void *input, size_t *len);
 /**
@@ -1100,6 +1172,7 @@ size_t ptls_get_read_epoch(ptls_t *tls);
 /**
  * Runs the handshake by dealing directly with handshake messages. Callers MUST delay supplying input to this function until the
  * epoch of the input becomes equal to the value returned by `ptls_get_read_epoch()`.
+ * At this time, ptls_handle_message does not support private_key_method's.
  * @param tls            the TLS context
  * @param sendbuf        buffer to which the output will be written
  * @param epoch_offsets  start and end offset of the messages in each epoch. For example, when the server emits ServerHello between
@@ -1284,6 +1357,14 @@ inline size_t ptls_aead_decrypt(ptls_aead_context_t *ctx, void *output, const vo
         init_func(&ctx->ctx);                                                                                                      \
         return &ctx->super;                                                                                                        \
     }
+
+#ifdef OPTS
+#include <stdarg.h>
+void msg(char *format, ...);
+extern int do_msg;
+#else
+#define msg(f, ...)
+#endif
 
 #ifdef __cplusplus
 }

@@ -31,6 +31,7 @@
 #include <sys/time.h>
 #endif
 #include "picotls.h"
+#include "picotest.h"
 
 #define PTLS_MAX_PLAINTEXT_RECORD_SIZE 16384
 #define PTLS_MAX_ENCRYPTED_RECORD_SIZE (16384 + 256)
@@ -225,6 +226,10 @@ struct st_ptls_t {
     unsigned send_change_cipher_spec : 1;
     unsigned needs_key_update : 1;
     unsigned key_update_send_request : 1;
+    unsigned in_handshake : 1;
+    ptls_buffer_t handshake_buf;
+    unsigned handshake_ke_modes;
+
     /**
      * misc.
      */
@@ -2503,6 +2508,10 @@ static int send_certificate_and_certificate_verify(ptls_t *tls, ptls_message_emi
         tls->ctx->emit_certificate != NULL ? tls->ctx->emit_certificate : &default_emit_certificate;
     int ret;
 
+    msg("send_certificate_and_certificate_verify");
+    if (tls->in_handshake)
+        goto resume_handshake;
+
     if (signature_algorithms->count == 0) {
         ret = PTLS_ALERT_MISSING_EXTENSION;
         goto Exit;
@@ -2514,23 +2523,88 @@ static int send_certificate_and_certificate_verify(ptls_t *tls, ptls_message_emi
 
     /* build and send CertificateVerify */
     if (tls->ctx->sign_certificate != NULL) {
-        ptls_push_message(emitter, tls->key_schedule, PTLS_HANDSHAKE_TYPE_CERTIFICATE_VERIFY, {
-            ptls_buffer_t *sendbuf = emitter->buf;
-            size_t algo_off = sendbuf->off;
-            ptls_buffer_push16(sendbuf, 0); /* filled in later */
-            ptls_buffer_push_block(sendbuf, 2, {
-                uint16_t algo;
-                uint8_t data[PTLS_MAX_CERTIFICATE_VERIFY_SIGNDATA_SIZE];
-                size_t datalen = build_certificate_verify_signdata(data, tls->key_schedule, context_string);
-                if ((ret = tls->ctx->sign_certificate->cb(tls->ctx->sign_certificate, tls, &algo, sendbuf,
-                                                          ptls_iovec_init(data, datalen), signature_algorithms->list,
-                                                          signature_algorithms->count)) != 0) {
+        if ((tls->ctx->private_key_method) && (tls->is_server))
+        {
+            uint8_t  handshake_data[PTLS_MAX_CERTIFICATE_VERIFY_SIGNDATA_SIZE];
+            size_t   handshake_len = 0;
+            if (!tls->in_handshake)
+            {
+                ptls_buffer_init(&tls->handshake_buf, "", 0);
+                handshake_len = build_certificate_verify_signdata(handshake_data, tls->key_schedule, context_string);
+            }
+            enum ptls_private_key_result_t res;
+            uint16_t algo;
+            if (!tls->in_handshake)
+            {
+                res = tls->ctx->private_key_method->sign(tls->ctx->sign_certificate,
+                                                         tls, &algo, &tls->handshake_buf,
+                                                         ptls_iovec_init(handshake_data, handshake_len),
+                                                         signature_algorithms->list,
+                                                         signature_algorithms->count);
+            }
+            else
+resume_handshake:
+                res = tls->ctx->private_key_method->complete(tls->ctx->sign_certificate,
+                                                             tls, &algo, &tls->handshake_buf);
+            switch (res)
+            {
+                case ptls_private_key_success:
+                    msg("Completed private_key_method");
+                    ret = 0;
+                    tls->in_handshake = 0;
+
+                    ptls_push_message(emitter, tls->key_schedule, PTLS_HANDSHAKE_TYPE_CERTIFICATE_VERIFY,
+                    {
+                        ptls_buffer_t *sendbuf = emitter->buf;
+                        size_t algo_off = sendbuf->off;
+                        size_t siglen = tls->handshake_buf.off;
+                        msg("signature len: %ld", siglen);
+                        ptls_buffer_push16(sendbuf, 0); /* filled in later */
+                        ptls_buffer_push_block(sendbuf, 2,
+                        {
+                            if ((ret = ptls_buffer_reserve(sendbuf, siglen)) != 0)
+                            {
+                                msg("Error reserving data space in signature");
+                                goto Exit;
+                            }
+                            memcpy(sendbuf->base + sendbuf->off, tls->handshake_buf.base, siglen);
+                            sendbuf->off += siglen;
+                            ptls_buffer_dispose(&tls->handshake_buf);
+                            sendbuf->base[algo_off] = (uint8_t)(algo >> 8);
+                            sendbuf->base[algo_off + 1] = (uint8_t)algo;
+                        });
+                    });
+                    break;
+                case ptls_private_key_retry:
+                    msg("Retry private_key_method");
+                    ret = PTLS_ERROR_IN_PROGRESS;
+                    tls->in_handshake = 1;
                     goto Exit;
-                }
-                sendbuf->base[algo_off] = (uint8_t)(algo >> 8);
-                sendbuf->base[algo_off + 1] = (uint8_t)algo;
+                case ptls_private_key_failure:
+                    msg("FAILED private_key_method");
+                    ret = PTLS_ERROR_SIGN_FAILURE;
+                    tls->in_handshake = 0;
+                    goto Exit;
+            }
+        }
+        else
+            ptls_push_message(emitter, tls->key_schedule, PTLS_HANDSHAKE_TYPE_CERTIFICATE_VERIFY, {
+                ptls_buffer_t *sendbuf = emitter->buf;
+                size_t algo_off = sendbuf->off;
+                ptls_buffer_push16(sendbuf, 0); /* filled in later */
+                ptls_buffer_push_block(sendbuf, 2, {
+                    uint16_t algo;
+                    uint8_t data[PTLS_MAX_CERTIFICATE_VERIFY_SIGNDATA_SIZE];
+                    size_t datalen = build_certificate_verify_signdata(data, tls->key_schedule, context_string);
+                    if ((ret = tls->ctx->sign_certificate->cb(tls->ctx->sign_certificate, tls, &algo, sendbuf,
+                                                              ptls_iovec_init(data, datalen), signature_algorithms->list,
+                                                              signature_algorithms->count)) != 0) {
+                        goto Exit;
+                    }
+                    sendbuf->base[algo_off] = (uint8_t)(algo >> 8);
+                    sendbuf->base[algo_off + 1] = (uint8_t)algo;
+                });
             });
-        });
     }
 
 Exit:
@@ -3517,6 +3591,11 @@ static int server_handle_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptl
     uint8_t finished_key[PTLS_MAX_DIGEST_SIZE];
     int accept_early_data = 0, is_second_flight = tls->state == PTLS_STATE_SERVER_EXPECT_SECOND_CLIENT_HELLO, ret;
 
+    if (tls->in_handshake)
+    {
+        ch.psk.ke_modes = tls->handshake_ke_modes;
+        goto resume_handshake;
+    }
     /* decode ClientHello */
     if ((ret = decode_client_hello(tls, &ch, message.base + PTLS_HANDSHAKE_HEADER_SIZE, message.base + message.len, properties)) !=
         0)
@@ -3854,9 +3933,14 @@ static int server_handle_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptl
             }
         }
 
+resume_handshake:
         ret = send_certificate_and_certificate_verify(tls, emitter, &ch.signature_algorithms, ptls_iovec_init(NULL, 0),
                                                       PTLS_SERVER_CERTIFICATE_VERIFY_CONTEXT_STRING, ch.status_request);
-
+        if (tls->in_handshake)
+        {
+            tls->handshake_ke_modes = ch.psk.ke_modes;
+            return PTLS_ERROR_IN_PROGRESS; /* Don't free anything as we're in process */
+        }
         if (ret != 0) {
             goto Exit;
         }
@@ -4211,8 +4295,10 @@ void **ptls_get_data_ptr(ptls_t *tls)
 static int handle_handshake_message(ptls_t *tls, ptls_message_emitter_t *emitter, ptls_iovec_t message, int is_end_of_record,
                                     ptls_handshake_properties_t *properties)
 {
-    uint8_t type = message.base[0];
     int ret;
+    if (tls->in_handshake)
+        return(server_handle_hello(tls, emitter, message, properties));
+    uint8_t type = message.base[0];
 
     switch (tls->state) {
     case PTLS_STATE_CLIENT_EXPECT_SERVER_HELLO:
@@ -4349,13 +4435,20 @@ static int handle_handshake_record(ptls_t *tls,
                                    ptls_handshake_properties_t *properties)
 {
     int ret;
-
+    size_t mess_len = 0;
+    const uint8_t *src, *src_end;
+    if (tls->in_handshake)
+    {
+        msg("Reenter handle_handshake_record");
+        src = tls->recvbuf.mess.base;
+        src_end = src + tls->recvbuf.mess.off;
+        goto resume_handshake;
+    }
     /* handshake */
     if (rec->type != PTLS_CONTENT_TYPE_HANDSHAKE)
         return PTLS_ALERT_DECODE_ERROR;
 
     /* flatten the unhandled messages */
-    const uint8_t *src, *src_end;
     if (tls->recvbuf.mess.base == NULL) {
         src = rec->fragment;
         src_end = src + rec->length;
@@ -4371,13 +4464,18 @@ static int handle_handshake_record(ptls_t *tls,
     /* handle the messages */
     ret = PTLS_ERROR_IN_PROGRESS;
     while (src_end - src >= 4) {
-        size_t mess_len = 4 + ntoh24(src + 1);
+        mess_len = 4 + ntoh24(src + 1);
         if (src_end - src < (int)mess_len)
             break;
+resume_handshake:
+        msg("Calling cb");
         ret = cb(tls, emitter, ptls_iovec_init(src, mess_len), src_end - src == mess_len, properties);
         switch (ret) {
         case 0:
         case PTLS_ERROR_IN_PROGRESS:
+            msg("Finished cb, ret: %d, in_handshake: %d", ret, tls->in_handshake);
+            if (tls->in_handshake)
+                return PTLS_ERROR_IN_PROGRESS;
             break;
         default:
             ptls_buffer_dispose(&tls->recvbuf.mess);
@@ -4388,6 +4486,7 @@ static int handle_handshake_record(ptls_t *tls,
 
     /* keep last partial message in buffer */
     if (src != src_end) {
+        msg("Preserving partial message");
         if (tls->recvbuf.mess.base == NULL) {
             ptls_buffer_init(&tls->recvbuf.mess, "", 0);
             if ((ret = ptls_buffer_reserve(&tls->recvbuf.mess, src_end - src)) != 0)
@@ -4410,6 +4509,9 @@ static int handle_input(ptls_t *tls, ptls_message_emitter_t *emitter, ptls_buffe
 {
     struct st_ptls_record_t rec;
     int ret;
+
+    if (tls->in_handshake)
+        goto resume_handshake;
 
     /* extract the record */
     if ((ret = parse_record(tls, &rec, input, inlen)) != 0)
@@ -4454,7 +4556,10 @@ static int handle_input(ptls_t *tls, ptls_message_emitter_t *emitter, ptls_buffe
 
     if (tls->recvbuf.mess.base != NULL || rec.type == PTLS_CONTENT_TYPE_HANDSHAKE) {
         /* handshake record */
+resume_handshake:
         ret = handle_handshake_record(tls, handle_handshake_message, emitter, &rec, properties);
+        if ((ret == PTLS_ERROR_IN_PROGRESS) && (tls->in_handshake))
+            return ret;
     } else {
         /* handling of an alert or an application record */
         switch (rec.type) {
@@ -4507,17 +4612,19 @@ int ptls_handshake(ptls_t *tls, ptls_buffer_t *_sendbuf, const void *input, size
     init_record_message_emmitter(tls, &emitter, _sendbuf);
     size_t sendbuf_orig_off = emitter.super.buf->off;
 
-    /* special handlings */
-    switch (tls->state) {
-    case PTLS_STATE_CLIENT_HANDSHAKE_START: {
-        assert(input == NULL || *inlen == 0);
-        assert(tls->ctx->key_exchanges[0] != NULL);
-        return send_client_hello(tls, &emitter.super, properties, NULL);
-    }
-    default:
-        break;
-    }
-
+    if (tls->in_handshake)
+        msg("ptls_handshake - in handshake");
+    else
+        /* special handlings */
+        switch (tls->state) {
+        case PTLS_STATE_CLIENT_HANDSHAKE_START: {
+            assert(input == NULL || *inlen == 0);
+            assert(tls->ctx->key_exchanges[0] != NULL);
+            return send_client_hello(tls, &emitter.super, properties, NULL);
+        }
+        default:
+            break;
+        }
     const uint8_t *src = input, *const src_end = src + *inlen;
     ptls_buffer_t decryptbuf;
     uint8_t decryptbuf_small[256];
@@ -4527,8 +4634,11 @@ int ptls_handshake(ptls_t *tls, ptls_buffer_t *_sendbuf, const void *input, size
     /* perform handhake until completion or until all the input has been swallowed */
     ret = PTLS_ERROR_IN_PROGRESS;
     while (ret == PTLS_ERROR_IN_PROGRESS && src != src_end) {
-        size_t consumed = src_end - src;
+        size_t consumed;
+        consumed = src_end - src;
         ret = handle_input(tls, &emitter.super, &decryptbuf, src, &consumed, properties);
+        if ((tls->in_handshake) && (consumed))
+            break;
         src += consumed;
         assert(decryptbuf.off == 0);
     }
@@ -4551,10 +4661,17 @@ int ptls_handshake(ptls_t *tls, ptls_buffer_t *_sendbuf, const void *input, size
                 emitter.super.buf->off = sendbuf_orig_off;
         break;
     }
-
-    *inlen -= src_end - src;
+    if (!tls->in_handshake)
+        *inlen -= src_end - src;
     return ret;
 }
+
+
+int ptls_handshake_in_private_key(ptls_t *tls)
+{
+    return tls->in_handshake;
+}
+
 
 int ptls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, const void *_input, size_t *inlen)
 {
@@ -5067,7 +5184,13 @@ int ptls_handle_message(ptls_t *tls, ptls_buffer_t *sendbuf, size_t epoch_offset
     if (ptls_get_read_epoch(tls) != in_epoch)
         return PTLS_ALERT_UNEXPECTED_MESSAGE;
 
-    return handle_handshake_record(tls, handle_handshake_message, &emitter.super, &rec, properties);
+    /* This is a back-door so do not handle private keys here.  */
+    int rc;
+    ptls_private_key_method_t *method = tls->ctx->private_key_method;
+    tls->ctx->private_key_method = NULL;
+    rc = handle_handshake_record(tls, handle_handshake_message, &emitter.super, &rec, properties);
+    tls->ctx->private_key_method = method;
+    return rc;
 }
 
 int ptls_esni_init_context(ptls_context_t *ctx, ptls_esni_context_t *esni, ptls_iovec_t esni_keys,
@@ -5208,4 +5331,30 @@ void ptls_hexdump(char *dst, const void *_src, size_t len)
         *dst++ = "0123456789abcdef"[src[i] & 0xf];
     }
     *dst++ = '\0';
+}
+
+
+#include <time.h>
+#include <sys/time.h>
+uint64_t lasttime = 0;
+void msg(char *format, ...)
+{
+    return;
+    /*
+    char buffer[2048];
+    va_list  va;
+    va_start(va, format);
+    vsnprintf(buffer, sizeof(buffer), format, va);
+    va_end(va);
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    struct tm ltm;
+    localtime_r(&tv.tv_sec, &ltm);
+    unsigned int ms = (unsigned int)(tv.tv_usec / 1000);
+    uint64_t thistime = tv.tv_sec * 1000 + ms;
+    printf("%02u:%02u:%02u.%03u +%03lu: %s\n", ltm.tm_hour, ltm.tm_min, ltm.tm_sec,
+           ms, lasttime ? (thistime - lasttime) : 0, buffer);
+    lasttime = thistime;
+    va_end(va);
+    */
 }

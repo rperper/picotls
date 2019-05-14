@@ -30,6 +30,8 @@
 #include "../lib/uecc.c"
 #include "test.h"
 
+int do_msg = 0;
+
 static void test_secp256r1_key_exchange(void)
 {
     test_key_exchange(&ptls_minicrypto_secp256r1, &ptls_minicrypto_secp256r1);

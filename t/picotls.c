@@ -593,7 +593,9 @@ static void test_handshake(ptls_iovec_t ticket, int mode, int expect_ticket, int
         break;
     }
 
+    msg("client handshake enter 1");
     ret = ptls_handshake(client, &cbuf, NULL, NULL, &client_hs_prop);
+    msg("client handshake exit 1");
     ok(ret == PTLS_ERROR_IN_PROGRESS);
     ok(cbuf.off != 0);
 
@@ -602,7 +604,9 @@ static void test_handshake(ptls_iovec_t ticket, int mode, int expect_ticket, int
     case TEST_HANDSHAKE_HRR:
     case TEST_HANDSHAKE_HRR_STATELESS:
         consumed = cbuf.off;
+        msg("server handshake special enter 1");
         ret = ptls_handshake(server, &sbuf, cbuf.base, &consumed, &server_hs_prop);
+        msg("server handshake special exit 1");
         if (mode == TEST_HANDSHAKE_HRR_STATELESS) {
             ok(ret == PTLS_ERROR_STATELESS_RETRY);
             ptls_free(server);
@@ -614,7 +618,9 @@ static void test_handshake(ptls_iovec_t ticket, int mode, int expect_ticket, int
         ok(sbuf.off != 0);
         cbuf.off = 0;
         consumed = sbuf.off;
+        msg("client handshake special enter 1");
         ret = ptls_handshake(client, &cbuf, sbuf.base, &consumed, &client_hs_prop);
+        msg("client handshake special exit 1");
         ok(ret == PTLS_ERROR_IN_PROGRESS);
         ok(sbuf.off == consumed);
         ok(cbuf.off != 0);
@@ -628,8 +634,14 @@ static void test_handshake(ptls_iovec_t ticket, int mode, int expect_ticket, int
     }
 
     consumed = cbuf.off;
-    ret = ptls_handshake(server, &sbuf, cbuf.base, &consumed, &server_hs_prop);
-
+    if (mode == TEST_HANDSHAKE_EARLY_DATA && require_client_authentication == 1)
+        ok(consumed == cbuf.off);
+    do
+    {
+        msg("server handshake enter 1, consumed: %d", consumed);
+        ret = ptls_handshake(server, &sbuf, cbuf.base, &consumed, &server_hs_prop);
+        msg("server handshake exit 1, consumed: %d, ret: %d, in_pk: %d", consumed, ret, ptls_handshake_in_private_key(server));
+    } while ((ret == PTLS_ERROR_IN_PROGRESS) && (ptls_handshake_in_private_key(server)));
     if (require_client_authentication == 1) {
         ok(ptls_is_psk_handshake(server) == 0);
         ok(ret == PTLS_ERROR_IN_PROGRESS);
@@ -667,12 +679,16 @@ static void test_handshake(ptls_iovec_t ticket, int mode, int expect_ticket, int
         ret = ptls_send(server, &sbuf, resp, strlen(resp));
         ok(ret == 0);
     } else {
+        if (mode == TEST_HANDSHAKE_EARLY_DATA && require_client_authentication == 1)
+            ok(consumed == cbuf.off);
         ok(consumed == cbuf.off);
         cbuf.off = 0;
     }
 
     consumed = sbuf.off;
+    msg("client handshake enter 2");
     ret = ptls_handshake(client, &cbuf, sbuf.base, &consumed, NULL);
+    msg("client handshake exit 2, ret = %d", ret);
     ok(ret == 0);
     ok(cbuf.off != 0);
     if (check_ch) {
@@ -697,7 +713,9 @@ static void test_handshake(ptls_iovec_t ticket, int mode, int expect_ticket, int
     if (require_client_authentication == 1) {
         ok(!ptls_handshake_is_complete(server));
         consumed = cbuf.off;
+        msg("server handshake special enter 2");
         ret = ptls_handshake(server, &sbuf, cbuf.base, &consumed, &server_hs_prop);
+        msg("server handshake special exit 2");
         ok(ret == 0);
         ok(ptls_handshake_is_complete(server));
         cbuf.off = 0;
@@ -794,7 +812,10 @@ static int sign_certificate(ptls_sign_certificate_t *self, ptls_t *tls, uint16_t
                             ptls_iovec_t input, const uint16_t *algorithms, size_t num_algorithms)
 {
     ++sc_callcnt;
-    return sc_orig->cb(sc_orig, tls, selected_algorithm, output, input, algorithms, num_algorithms);
+    msg("1st sign enter");
+    int rc = sc_orig->cb(sc_orig, tls, selected_algorithm, output, input, algorithms, num_algorithms);
+    msg("1st sign exit");
+    return rc;
 }
 
 static ptls_sign_certificate_t *second_sc_orig;
@@ -803,7 +824,10 @@ static int second_sign_certificate(ptls_sign_certificate_t *self, ptls_t *tls, u
                                    ptls_iovec_t input, const uint16_t *algorithms, size_t num_algorithms)
 {
     ++sc_callcnt;
-    return second_sc_orig->cb(second_sc_orig, tls, selected_algorithm, output, input, algorithms, num_algorithms);
+    msg("2nd sign enter");
+    int rc = second_sc_orig->cb(second_sc_orig, tls, selected_algorithm, output, input, algorithms, num_algorithms);
+    msg("2nd sign exit");
+    return rc;
 }
 
 static void test_full_handshake_impl(int require_client_authentication)
@@ -999,7 +1023,9 @@ static void test_enforce_retry(int use_cookie)
     server = ptls_new(ctx, 1);
 
     consumed = cbuf.off;
-    ret = ptls_handshake(server, &sbuf, cbuf.base, &consumed, &server_hs_prop);
+    do
+        ret = ptls_handshake(server, &sbuf, cbuf.base, &consumed, &server_hs_prop);
+    while (ptls_handshake_in_private_key(server));
     cbuf.off = 0;
 
     if (use_cookie) {
@@ -1017,7 +1043,9 @@ static void test_enforce_retry(int use_cookie)
     sbuf.off = 0;
 
     consumed = cbuf.off;
-    ret = ptls_handshake(server, &sbuf, cbuf.base, &consumed, &server_hs_prop);
+    do
+        ret = ptls_handshake(server, &sbuf, cbuf.base, &consumed, &server_hs_prop);
+    while (ptls_handshake_in_private_key(server));
     ok(ret == 0);
     ok(cbuf.off == consumed);
     cbuf.off = 0;
@@ -1032,7 +1060,9 @@ static void test_enforce_retry(int use_cookie)
     ok(ret == 0);
 
     consumed = cbuf.off;
-    ret = ptls_receive(server, &decbuf, cbuf.base, &consumed);
+    do
+        ret = ptls_receive(server, &decbuf, cbuf.base, &consumed);
+    while (ptls_handshake_in_private_key(server));
     ok(ret == 0);
     ok(cbuf.off == consumed);
     cbuf.off = 0;
@@ -1151,6 +1181,70 @@ static int feed_messages(ptls_t *tls, ptls_buffer_t *outbuf, size_t *out_epoch_o
     return ret;
 }
 
+ptls_iovec_t in;
+uint16_t *algos;
+size_t num_algos;
+int    retry_count;
+enum ptls_private_key_result_t sign_start(ptls_sign_certificate_t *do_sign,
+                                          ptls_t *tls,
+                                          uint16_t *selected_algorithm,
+                                          ptls_buffer_t *output,
+                                          ptls_iovec_t input,
+                                          const uint16_t *algorithms,
+                                          size_t num_algorithms)
+{
+    msg("sign_start, in len: %ld algoriths %ld", input.len, num_algorithms);
+    /* Remove the comments from the following to have no offload:
+    int rc = do_sign->cb(do_sign, tls, selected_algorithm, output, input, algorithms,
+                         num_algorithms);
+    if (rc != 0)
+        return ptls_private_key_failure;
+    return ptls_private_key_success;
+    */
+    retry_count = 0;
+    in.base = malloc(input.len);
+    if (!in.base)
+    {
+        msg("WHAT!!! CANT ALLOCATE %d BYTES!", input.len);
+        return ptls_private_key_failure;
+    }
+    in.len = input.len;
+    memcpy(in.base, input.base, input.len);
+    algos = malloc(num_algorithms * sizeof(uint16_t));
+    if (!algos)
+    {
+        msg("WHAT!!! CANT ALLOCATE ALGOS %d BYTES!",num_algorithms * sizeof(uint16_t));
+        return ptls_private_key_failure;
+    }
+    memcpy(algos, algorithms, num_algorithms * sizeof(uint16_t));
+    num_algos = num_algorithms;
+    return ptls_private_key_retry;
+}
+
+enum ptls_private_key_result_t sign_finish(ptls_sign_certificate_t *do_sign,
+                                           ptls_t *tls,
+                                           uint16_t *selected_algorithm,
+                                           ptls_buffer_t *output)
+{
+    msg("sign_finish");
+    ++retry_count;
+    if (retry_count <= 2)
+    {
+        msg("retry again");
+        return ptls_private_key_retry;
+    }
+    int rc = do_sign->cb(do_sign, tls, selected_algorithm, output, in, algos,
+                         num_algos);
+    free(in.base);
+    free(algos);
+    msg("sign_finish ret: %d", rc);
+    if (rc == 0)
+        return ptls_private_key_success;
+    return ptls_private_key_failure;
+}
+
+ptls_private_key_method_t private_key_method = { sign_start, sign_finish };
+
 static void test_handshake_api(void)
 {
     ptls_t *client, *server;
@@ -1161,6 +1255,9 @@ static void test_handshake_api(void)
     ptls_encrypt_ticket_t encrypt_ticket = {on_copy_ticket};
     ptls_save_ticket_t save_ticket = {on_save_ticket};
     int ret;
+
+    ctx->private_key_method = &private_key_method;
+    ctx_peer->private_key_method = &private_key_method;
 
     ctx->update_traffic_key = &update_traffic_key;
     ctx->omit_end_of_early_data = 1;
@@ -1368,7 +1465,9 @@ static void test_handshake_api(void)
     sbuf.off = 0;
     ok(cbuf.off != 0);
     inlen = cbuf.off;
-    ret = ptls_handshake(server, &sbuf, cbuf.base, &inlen, &server_hs_prop); /* CH -> SH..SF,NST */
+    do
+        ret = ptls_handshake(server, &sbuf, cbuf.base, &inlen, &server_hs_prop); /* CH -> SH..SF,NST */
+    while (ptls_handshake_in_private_key(server));
     ok(ret == 0);
     ok(!ptls_handshake_is_complete(server));
     ok(cbuf.off == inlen);
@@ -1381,7 +1480,9 @@ static void test_handshake_api(void)
     ok(inlen < sbuf.off); /* ignore NST */
     sbuf.off = 0;
     inlen = cbuf.off;
-    ret = ptls_handshake(server, &sbuf, cbuf.base, &inlen, &server_hs_prop); /* CF -> */
+    do
+        ret = ptls_handshake(server, &sbuf, cbuf.base, &inlen, &server_hs_prop); /* CF -> */
+    while (ptls_handshake_in_private_key(server));
     ok(ret == 0);
     ok(ptls_handshake_is_complete(server));
     ok(sbuf.off == 0);
@@ -1408,6 +1509,9 @@ static void test_all_handshakes(void)
     ptls_sign_certificate_t server_sc = {sign_certificate};
     sc_orig = ctx_peer->sign_certificate;
     ctx_peer->sign_certificate = &server_sc;
+
+    ctx->private_key_method = &private_key_method;
+    ctx_peer->private_key_method = &private_key_method;
 
     ptls_sign_certificate_t client_sc = {second_sign_certificate};
     if (ctx_peer != ctx) {
@@ -1437,6 +1541,22 @@ static void test_all_handshakes(void)
     if (ctx_peer != ctx)
         ctx->sign_certificate = second_sc_orig;
 }
+
+
+void test_just_one_handshake(void)
+{
+    ptls_sign_certificate_t server_sc = {sign_certificate};
+    sc_orig = ctx_peer->sign_certificate;
+    ctx_peer->sign_certificate = &server_sc;
+    ctx_peer->private_key_method = &private_key_method;
+    ptls_sign_certificate_t client_sc = {second_sign_certificate};
+    if (ctx_peer != ctx) {
+        second_sc_orig = ctx->sign_certificate;
+        ctx->sign_certificate = &client_sc;
+    }
+    test_full_handshake();
+}
+
 
 void test_picotls(void)
 {

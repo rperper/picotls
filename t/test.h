@@ -102,4 +102,8 @@ void test_key_exchange(ptls_key_exchange_algorithm_t *client, ptls_key_exchange_
 void test_picotls(void);
 void test_picotls_esni(ptls_key_exchange_context_t **keys);
 
+#ifdef OPTS
+#include <stdarg.h>
+void test_just_one_handshake(void);
+#endif
 #endif

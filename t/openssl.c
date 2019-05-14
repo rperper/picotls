@@ -258,6 +258,58 @@ DEFINE_FFX_AES128_ALGORITHMS(openssl);
 DEFINE_FFX_CHACHA20_ALGORITHMS(openssl);
 #endif
 
+#ifdef OPTS
+int do_msg = 0;
+static int sign_only()
+{
+    ptls_openssl_sign_certificate_t openssl_sign_certificate;
+    ptls_openssl_sign_certificate_t *sc = &openssl_sign_certificate;
+    ptls_openssl_verify_certificate_t openssl_verify_certificate;
+
+    do_msg = 1;
+    ptls_iovec_t cert;
+    setup_certificate(&cert);
+    X509_STORE *cert_store = X509_STORE_new();
+    X509_STORE_set_verify_cb(cert_store, verify_cert_cb);
+    ptls_openssl_init_verify_certificate(&openssl_verify_certificate, cert_store);
+    /* we should call X509_STORE_free on OpenSSL 1.1 or in prior versions decrement refount then call _free */
+    ptls_context_t openssl_ctx = {ptls_openssl_random_bytes,
+                                  &ptls_get_time,
+                                  ptls_openssl_key_exchanges,
+                                  ptls_openssl_cipher_suites,
+                                  {&cert, 1},
+                                  NULL,
+                                  NULL,
+                                  NULL,
+                                  &openssl_sign_certificate.super};
+
+    BIO *bio = BIO_new_mem_buf(RSA_PRIVATE_KEY, (int)strlen(RSA_PRIVATE_KEY));
+    EVP_PKEY *pkey = PEM_read_bio_PrivateKey(bio, NULL, NULL, NULL);
+    assert(pkey != NULL || !"failed to load private key");
+    BIO_free(bio);
+    msg("Enter sign");
+    ptls_openssl_init_sign_certificate(sc, pkey);
+    msg("Did init");
+    ptls_context_t openssl_ctx_sha256only = openssl_ctx;
+    ++openssl_ctx_sha256only.cipher_suites;
+    assert(openssl_ctx_sha256only.cipher_suites[0]->hash->digest_size == 32); /* sha256 */
+
+    ctx = ctx_peer = &openssl_ctx;
+    verify_certificate = &openssl_verify_certificate.super;
+
+    ADD_FFX_AES128_ALGORITHMS(openssl);
+#if PTLS_OPENSSL_HAVE_CHACHA20_POLY1305
+    ADD_FFX_CHACHA20_ALGORITHMS(openssl);
+#endif
+    msg("Call test_full_handshake");
+    test_just_one_handshake();
+    msg("Done test_full_handshake");
+    EVP_PKEY_free(pkey);
+    return done_testing();
+
+}
+#endif
+
 int main(int argc, char **argv)
 {
     ptls_openssl_sign_certificate_t openssl_sign_certificate;
@@ -270,6 +322,28 @@ int main(int argc, char **argv)
     ENGINE_load_builtin_engines();
     ENGINE_register_all_ciphers();
     ENGINE_register_all_digests();
+#endif
+
+#ifdef OPTS
+    if (argc > 1)
+    {
+        int opt;
+        while ((opt = getopt(argc, argv, "s")) != -1)
+        {
+            switch (opt)
+            {
+                case 's':
+                    printf("Sign certificate\n");
+                    return sign_only();
+                default:
+                    printf("Usage: test-openssl.t [-s]\n");
+                    printf("   no parameters runs ALL tests\n");
+                    printf("   -s is a sign test where we test a single handshake with logging\n");
+                    break;
+            }
+        }
+        return 1;
+    }
 #endif
 
     subtest("bf", test_bf);
