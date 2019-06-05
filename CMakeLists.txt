@@ -7,12 +7,12 @@ PROJECT(picotls)
 #set(OPENSSL_ROOT_DIR /home/user/proj2/openssl)
 #set(OPENSSL_USE_STATIC_LIBS TRUE)
 # The following lines are examples for BoringSSL
-set(BORING_ROOT /home/user/proj/thirdparty/boringssl)
-set(BORING_LIBRARY_DIR /home/user/proj/thirdparty/lib)
+#set(BORING_ROOT /home/user/proj/thirdparty/boringssl)
+#set(BORING_LIBRARY_DIR /home/user/proj/thirdparty/lib)
 # The following lines are examples for Brotli
-set(BROTLI_ROOT /home/user/proj/thirdparty/brotli)
-set(BROTLI_DEC /home/user/proj/thirdparty/lib/libbrotlidec-static.a)
-set(BROTLI_ENC /home/user/proj/thirdparty/lib/libbrotlienc-static.a)
+#set(BROTLI_ROOT /home/user/proj/thirdparty/brotli)
+#set(BROTLI_DEC /home/user/proj/thirdparty/lib/libbrotlidec-static.a)
+#set(BROTLI_ENC /home/user/proj/thirdparty/lib/libbrotlienc-static.a)
 
 FIND_PACKAGE(PkgConfig REQUIRED)
 
