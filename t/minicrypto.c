@@ -104,7 +104,13 @@ static void test_hrr(void)
     ok(cbuf.base[5] == 1 /* PTLS_HANDSHAKE_TYPE_CLIENT_HELLO */);
 
     consumed = cbuf.off;
-    ret = ptls_handshake(server, &sbuf, cbuf.base, &consumed, NULL);
+    do
+    {
+        ret = ptls_handshake(server, &sbuf, cbuf.base, &consumed, NULL);
+        if (ret == PTLS_ERROR_IN_PROGRESS)
+            usleep(100);
+    }
+    while (ret == PTLS_ERROR_IN_PROGRESS);
     ok(ret == 0);
     ok(consumed == cbuf.off);
     cbuf.off = 0;
